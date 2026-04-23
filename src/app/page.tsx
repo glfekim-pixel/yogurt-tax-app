@@ -11,6 +11,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointEleme
 
 type EntryType = 'sale' | 'cost';
 interface Entry { id: number; type: EntryType; date: string; cat: string; supply: number; vat: number; total: number; memo: string; }
+interface DeliveryRecord { month: string; amount: number; }
 
 const fmt = (n: number) => '₩' + Math.round(n).toLocaleString('ko-KR');
 const fmtS = (n: number) => {
@@ -20,7 +21,7 @@ const fmtS = (n: number) => {
   return fmt(n);
 };
 
-const G = '#1D9E75', R = '#E24B4A', B = '#378ADD';
+const G = '#1D9E75', R = '#E24B4A', B = '#378ADD', O = '#BA7517';
 const CAT_C = ['#E24B4A','#BA7517','#185FA5','#534AB7','#993556','#0F6E56','#888780'];
 
 function calcIT(p: number) {
@@ -49,37 +50,84 @@ function last6() {
   });
 }
 
+function getWeekRange(dateStr: string): { start: string; end: string; label: string } {
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - ((day + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const f = (dt: Date) => dt.toISOString().slice(0, 10);
+  const mL = `${monday.getMonth() + 1}/${monday.getDate()}`;
+  const sL = `${sunday.getMonth() + 1}/${sunday.getDate()}`;
+  return { start: f(monday), end: f(sunday), label: `${mL}~${sL}` };
+}
+
 const today = () => new Date().toISOString().slice(0, 10);
+const thisMonth = () => new Date().toISOString().slice(0, 7);
 
 export default function App() {
   const [tab, setTab] = useState('dashboard');
   const [entries, setEntries] = useState<Entry[]>([]);
-  const [selMonth, setSelMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [deliveryRecords, setDeliveryRecords] = useState<DeliveryRecord[]>([]);
+  const [selMonth, setSelMonth] = useState(thisMonth());
+  const [inputUnit, setInputUnit] = useState<'day' | 'week' | 'month'>('day');
   const [form, setForm] = useState({ type: 'sale', date: today(), cat: '매출', amount: '', vatMode: 'include', memo: '' });
+  const [deliveryForm, setDeliveryForm] = useState({ month: thisMonth(), amount: '' });
   const [bizType, setBizType] = useState('general');
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    try { const s = localStorage.getItem('yta_v2'); if (s) setEntries(JSON.parse(s)); } catch {}
+    try {
+      const s = localStorage.getItem('yta_v2'); if (s) setEntries(JSON.parse(s));
+      const d = localStorage.getItem('yta_delivery'); if (d) setDeliveryRecords(JSON.parse(d));
+    } catch {}
   }, []);
 
   const save = (e: Entry[]) => { setEntries(e); try { localStorage.setItem('yta_v2', JSON.stringify(e)); } catch {} };
+  const saveDelivery = (d: DeliveryRecord[]) => { setDeliveryRecords(d); try { localStorage.setItem('yta_delivery', JSON.stringify(d)); } catch {} };
+
   const addE = () => {
     const raw = parseFloat(form.amount);
     if (!raw || isNaN(raw)) { alert('금액을 입력하세요'); return; }
     const sup = form.vatMode === 'include' ? Math.round(raw / 1.1) : Math.round(raw);
     const vat = Math.round(sup * 0.1);
-    save([{ id: Date.now(), type: form.type as EntryType, date: form.date, cat: form.cat, supply: sup, vat, total: sup + vat, memo: form.memo }, ...entries]);
-    setForm(f => ({ ...f, amount: '', memo: '', date: today() }));
+    let entryDate = form.date;
+    let entryMemo = form.memo;
+    if (inputUnit === 'week') {
+      const { start, label } = getWeekRange(form.date);
+      entryDate = start;
+      entryMemo = entryMemo ? `[주간 ${label}] ${entryMemo}` : `[주간 ${label}]`;
+    } else if (inputUnit === 'month') {
+      entryDate = form.date + '-01';
+      entryMemo = entryMemo ? `[월간] ${entryMemo}` : '[월간]';
+    }
+    save([{ id: Date.now(), type: form.type as EntryType, date: entryDate, cat: form.cat, supply: sup, vat, total: sup + vat, memo: entryMemo }, ...entries]);
+    setForm(f => ({ ...f, amount: '', memo: '', date: inputUnit === 'month' ? thisMonth() : today() }));
   };
+
   const delE = (id: number) => save(entries.filter(e => e.id !== id));
+
+  const addDelivery = () => {
+    const raw = parseFloat(deliveryForm.amount);
+    if (!raw || isNaN(raw)) { alert('배달 매출 금액을 입력하세요'); return; }
+    const updated = deliveryRecords.filter(d => d.month !== deliveryForm.month);
+    saveDelivery([...updated, { month: deliveryForm.month, amount: Math.round(raw) }]);
+    setDeliveryForm(f => ({ ...f, amount: '' }));
+  };
+
+  const getDelivery = (month: string) => deliveryRecords.find(d => d.month === month)?.amount ?? 0;
 
   const m6 = last6();
   const md6 = m6.map(m => getMD(entries, m));
-  const cur = new Date().toISOString().slice(0, 7);
+  const cur = thisMonth();
   const curD = getMD(entries, cur);
   const selD = getMD(entries, selMonth);
   const allMonths = [...new Set([...m6, ...entries.map(e => e.date.slice(0, 7))])].sort().reverse().slice(0, 12);
+
+  const selDelivery = getDelivery(selMonth);
+  const selTotalWithVat = selD.sales + selD.ovat;
+  const selOther = Math.max(0, selTotalWithVat - selDelivery);
 
   const now = new Date();
   const vdl = [{ m: 1, d: 25, l: '부가세 신고(1기)' }, { m: 7, d: 25, l: '부가세 신고(2기)' }];
@@ -128,7 +176,6 @@ export default function App() {
 
   return (
     <div className="max-w-md mx-auto min-h-screen bg-white font-sans pb-24">
-      {/* Header */}
       <div className="px-4 pt-safe pt-6 pb-3 border-b border-gray-100">
         <div className="flex justify-between items-start">
           <div>
@@ -141,7 +188,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* VAT Banner */}
       <div className="mx-4 mt-3 bg-amber-50 border border-amber-100 rounded-xl p-3 flex justify-between items-center">
         <div>
           <p className="text-xs font-medium text-amber-700">{nextL} D-{minD}</p>
@@ -150,7 +196,6 @@ export default function App() {
         <p className="text-xl font-semibold text-amber-700">{fmt(curD.vatPay)}</p>
       </div>
 
-      {/* Tabs */}
       <div className="flex px-2 mt-3 border-b border-gray-100 sticky top-0 bg-white z-10">
         {[['dashboard','대시보드'],['input','입력'],['report','리포트'],['tax','세금'],['calendar','일정']].map(([id, l]) => (
           <button key={id} className={tc(id)} onClick={() => setTab(id)}>{l}</button>
@@ -159,7 +204,6 @@ export default function App() {
 
       <div className="px-4 pt-4 space-y-4">
 
-        {/* DASHBOARD */}
         {tab === 'dashboard' && <>
           <div className="grid grid-cols-2 gap-2.5">
             {mc('이번 달 매출', fmt(curD.sales), 'text-green-600')}
@@ -188,13 +232,33 @@ export default function App() {
           </div>
         </>}
 
-        {/* INPUT */}
         {tab === 'input' && <>
+          {/* 입력 단위 토글 */}
+          <div className="bg-white border border-gray-100 rounded-xl p-4">
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">입력 단위</p>
+            <div className="flex gap-2">
+              {(['day', 'week', 'month'] as const).map(u => (
+                <button key={u}
+                  onClick={() => { setInputUnit(u); setForm(f => ({ ...f, date: u === 'month' ? thisMonth() : today() })); }}
+                  className={`flex-1 py-2.5 rounded-lg text-sm font-medium border transition-colors ${inputUnit === u ? 'bg-gray-900 text-white border-gray-900' : 'border-gray-200 text-gray-500'}`}>
+                  {u === 'day' ? '일별' : u === 'week' ? '주별' : '월별'}
+                </button>
+              ))}
+            </div>
+            {inputUnit === 'week' && <p className="text-xs text-gray-400 mt-2">선택한 날짜가 포함된 주(월~일) 매출을 입력합니다</p>}
+            {inputUnit === 'month' && <p className="text-xs text-gray-400 mt-2">월 전체 합계를 한 번에 입력합니다</p>}
+          </div>
+
           <div className="bg-white border border-gray-100 rounded-xl p-4 space-y-3">
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">거래 입력</p>
             {([
               ['구분', <select key="t" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 bg-white" value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value, cat: e.target.value === 'sale' ? '매출' : '식재료' }))}><option value="sale">매출 (수입)</option><option value="cost">매입/비용 (지출)</option></select>],
-              ['날짜', <input key="d" type="date" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />],
+              [inputUnit === 'month' ? '월 선택' : inputUnit === 'week' ? '날짜 (해당 주 중 하루)' : '날짜',
+                inputUnit === 'month'
+                  ? <input key="d" type="month" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+                  : <input key="d" type="date" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              ],
+              ...(inputUnit === 'week' ? [['해당 주', <div key="wk" className="w-full text-sm bg-gray-50 border border-gray-100 rounded-lg px-3 py-2.5 text-gray-600">{getWeekRange(form.date).label} (월~일)</div>]] as [string, React.ReactNode][] : []),
               ['카테고리', <select key="c" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 bg-white" value={form.cat} onChange={e => setForm(f => ({ ...f, cat: e.target.value }))}>{catRows(form.type).map(c => <option key={c}>{c}</option>)}</select>],
               ['금액 (원)', <input key="a" type="number" inputMode="numeric" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5" placeholder="예: 500000" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />],
               ['부가세', <select key="v" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2.5 bg-white" value={form.vatMode} onChange={e => setForm(f => ({ ...f, vatMode: e.target.value }))}><option value="include">포함 (VAT 포함금액)</option><option value="exclude">별도 (공급가액만)</option></select>],
@@ -202,9 +266,30 @@ export default function App() {
             ] as [string, React.ReactNode][]).map(([l, inp]) => <div key={l}><p className="text-xs text-gray-400 mb-1">{l}</p>{inp}</div>)}
             <div className="flex gap-2 pt-1">
               <button onClick={addE} className="flex-1 bg-gray-900 text-white text-sm py-3 rounded-xl font-medium">추가하기</button>
-              <button onClick={() => setForm(f => ({ ...f, amount: '', memo: '', date: today() }))} className="px-4 text-sm border border-gray-200 rounded-xl text-gray-500">초기화</button>
+              <button onClick={() => setForm(f => ({ ...f, amount: '', memo: '', date: inputUnit === 'month' ? thisMonth() : today() }))} className="px-4 text-sm border border-gray-200 rounded-xl text-gray-500">초기화</button>
             </div>
           </div>
+
+          {/* 배달매출 월 마감 입력 */}
+          <div className="bg-orange-50 border border-orange-100 rounded-xl p-4 space-y-3">
+            <div>
+              <p className="text-xs font-medium text-orange-700 uppercase tracking-wide">배달 매출 월 마감</p>
+              <p className="text-xs text-orange-500 mt-0.5">배달의민족·쿠팡이츠 등 플랫폼 합계를 입력하세요</p>
+            </div>
+            <div>
+              <p className="text-xs text-orange-600 mb-1">월 선택</p>
+              <input type="month" className="w-full text-sm border border-orange-200 rounded-lg px-3 py-2.5 bg-white" value={deliveryForm.month} onChange={e => setDeliveryForm(f => ({ ...f, month: e.target.value }))} />
+            </div>
+            <div>
+              <p className="text-xs text-orange-600 mb-1">배달 매출 합계 (원, VAT 포함)</p>
+              <input type="number" inputMode="numeric" className="w-full text-sm border border-orange-200 rounded-lg px-3 py-2.5 bg-white" placeholder="예: 3500000" value={deliveryForm.amount} onChange={e => setDeliveryForm(f => ({ ...f, amount: e.target.value }))} />
+            </div>
+            {getDelivery(deliveryForm.month) > 0 && (
+              <p className="text-xs text-orange-500">저장된 값: {fmt(getDelivery(deliveryForm.month))}</p>
+            )}
+            <button onClick={addDelivery} className="w-full bg-orange-500 text-white text-sm py-3 rounded-xl font-medium">저장하기</button>
+          </div>
+
           <div className="bg-white border border-gray-100 rounded-xl p-4">
             <div className="flex justify-between items-center mb-3"><p className="text-xs text-gray-400 uppercase tracking-wide font-medium">전체 내역</p><span className="text-xs text-gray-400">{entries.length}건</span></div>
             {!entries.length ? <p className="text-xs text-gray-300 text-center py-4">내역이 없습니다</p> : entries.map(e => (
@@ -216,7 +301,6 @@ export default function App() {
           </div>
         </>}
 
-        {/* REPORT */}
         {tab === 'report' && <>
           <div className="bg-white border border-gray-100 rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">월 선택</p>
@@ -225,13 +309,59 @@ export default function App() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
-            {mc('매출', fmt(selD.sales), 'text-green-600')}
+            {mc('매출 (공급가)', fmt(selD.sales), 'text-green-600')}
             {mc('비용', fmt(selD.costs), 'text-red-500')}
             {mc('순이익', fmt(selD.profit), selD.profit >= 0 ? 'text-green-600' : 'text-red-500')}
             {mc('이익률', `${mg}%`, mg >= 0 ? 'text-green-600' : 'text-red-500')}
             {mc('매출 세액', fmt(selD.ovat))}
             {mc('납부 부가세', fmt(selD.vatPay), 'text-amber-600')}
           </div>
+
+          {/* 매출 구성 — 배달/기타 */}
+          <div className="bg-white border border-gray-100 rounded-xl p-4">
+            <div className="flex justify-between items-center mb-3">
+              <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">매출 구성</p>
+              {selDelivery === 0 && <span className="text-xs text-orange-400">배달매출 미입력</span>}
+            </div>
+            <div className="flex justify-between items-center py-2.5 border-b border-gray-100">
+              <span className="text-sm text-gray-700 font-medium">총 매출 (VAT 포함)</span>
+              <span className="text-sm font-semibold text-green-600">{fmt(selTotalWithVat)}</span>
+            </div>
+            <div className="flex justify-between items-center py-2.5 border-b border-gray-100">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-sm inline-block" style={{ background: O }} />
+                <span className="text-sm text-gray-600">배달 매출</span>
+              </div>
+              <span className="text-sm font-medium" style={{ color: O }}>{selDelivery > 0 ? fmt(selDelivery) : '—'}</span>
+            </div>
+            <div className="flex justify-between items-center py-2.5 border-b border-gray-100">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-sm inline-block" style={{ background: G }} />
+                <span className="text-sm text-gray-600">기타 매출 (현장 등)</span>
+              </div>
+              <span className="text-sm font-medium text-green-600">{selDelivery > 0 ? fmt(selOther) : '—'}</span>
+            </div>
+            {selDelivery > 0 && selTotalWithVat > 0 && (
+              <>
+                <div className="mt-3 mb-1 flex justify-between text-xs text-gray-400">
+                  <span>배달 비중</span>
+                  <span>{Math.round(selDelivery / selTotalWithVat * 100)}%</span>
+                </div>
+                <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden flex">
+                  <div className="h-full" style={{ width: `${Math.min(100, Math.round(selDelivery / selTotalWithVat * 100))}%`, background: O }} />
+                  <div className="h-full flex-1" style={{ background: G }} />
+                </div>
+                <div className="flex gap-4 mt-2">
+                  <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: O }} />배달</span>
+                  <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: G }} />기타</span>
+                </div>
+              </>
+            )}
+            {selDelivery === 0 && (
+              <p className="text-xs text-gray-300 mt-2">입력 탭에서 배달 매출을 입력하면 구성을 확인할 수 있습니다</p>
+            )}
+          </div>
+
           <div className="bg-white border border-gray-100 rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">매출 / 비용 / 순이익</p>
             <div style={{ height: 180 }}>
@@ -287,7 +417,6 @@ export default function App() {
           </div>
         </>}
 
-        {/* TAX */}
         {tab === 'tax' && <>
           <div className="bg-white border border-gray-100 rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">사업자 설정</p>
@@ -321,7 +450,6 @@ export default function App() {
           </div>
         </>}
 
-        {/* CALENDAR */}
         {tab === 'calendar' && <>
           <div className="bg-white border border-gray-100 rounded-xl p-4">
             <p className="text-xs text-gray-400 uppercase tracking-wide font-medium mb-3">2026년 세금 신고 일정</p>
